@@ -1,0 +1,65 @@
+---
+- name: baston instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+      - name: include output vars
+        include_vars: vars/outputs_vars
+
+      - name: include vpc vars
+        include_vars: vars/vpc_setup
+
+      - name: create key pair
+        ec2_key:
+            name: baston_key
+            region: "{{region}}"
+        register: key_out
+
+      - name: save the key
+        copy:
+          content: "{{key_out.key.private_key}}"
+          dest: "./baston-key.pem"
+          mode: "0600"
+        when: key_out.changed
+
+      - name: create baston security group
+        ec2_group:
+          name: baston_sq
+          description: baston security group
+          vpc_id: "{{vpcid}}"
+          region: "{{region}}"
+          rules:
+            - proto: tcp
+              from_port: 22
+              to_port: 22
+              cidr_ip: "{{my_ip}}"
+        register: sq_group_out
+
+      - name: create baston ec2 instance
+        ec2_instance:
+          name: "baston-ec2-instance"
+          key_name: "baston_key"
+          vpc_subnet_id: "{{publicSubId1}}"
+          instance_type: "t2.micro"
+          security_group: "{{sq_group_out.group_id}}"
+          region: "{{region}}"
+          network:
+            assign_public_ip: true
+          image_id: "{{baston_ami}}"
+          tags:
+            Name: baston-ec2
+          exact_count: 1
+          availability_zone: "{{availability_zone_1}}"
+          wait: true
+        register: baston_ec2_out
+
+      - name: add baston security group id
+        blockinfile:
+          path: vars/outputs_vars
+          append_newline: true
+          block: | 
+              baston_gp_id: {{baston_ec2_out.group_id}}
+      
+
+

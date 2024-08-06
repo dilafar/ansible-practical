@@ -1,0 +1,177 @@
+---
+- name: vpc for all services
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: import vpc variables
+      include_vars: vars/vpc_setup
+
+    - name: create app vpc
+      ec2_vpc_net:
+          name: "{{vpc_name}}"
+          cidr_block: "{{vpc_cidr}}"
+          region: "{{region}}"
+          dns_hostnames: yes
+          dns_support: yes
+          state: present
+          tags:
+            Name: "vpc-app"
+          tenancy: default
+      register: vpc_out
+
+    - name: create public subnet 1
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{vpc_out.vpc.id}}"
+        cidr: "{{public_sub1}}"
+        az: "{{availability_zone_1}}"
+        region: "{{region}}"
+        map_public: true
+        tags:
+          Name: "pub_sub-1"
+      register: public_subnet_1
+
+    - name: create public subnet 2
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{vpc_out.vpc.id}}"
+        cidr: "{{public_sub2}}"
+        az: "{{availability_zone_2}}"
+        region: "{{region}}"
+        map_public: true
+        tags:
+          Name: "pub_sub-2"
+      register: public_subnet_2
+
+    - name: create public subnet 3
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{vpc_out.vpc.id}}"
+        cidr: "{{public_sub3}}"
+        az: "{{availability_zone_3}}"
+        region: "{{region}}"
+        map_public: true
+        tags:
+          Name: "pub_sub-3"
+      register: public_subnet_3
+
+    - name: create private subnet 1
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{vpc_out.vpc.id}}"
+        cidr: "{{private_sub1}}"
+        az: "{{availability_zone_1}}"
+        region: "{{region}}"
+        tags:
+          Name: "private_sub-1"
+      register: private_subnet_1
+
+    - name: create private subnet 2
+      ec2_vpc_subnet:
+         state: present
+         vpc_id: "{{vpc_out.vpc.id}}"
+         cidr: "{{private_sub2}}"
+         az: "{{availability_zone_2}}"
+         region: "{{region}}"
+         tags:
+            Name: "private_sub-2"
+      register: private_subnet_2
+
+    - name: create private subnet 3
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{vpc_out.vpc.id}}"
+        cidr: "{{private_sub3}}"
+        az: "{{availability_zone_3}}"
+        region: "{{region}}"
+        tags:
+           Name: "private_sub-3"
+      register: private_subnet_3
+
+    - name: create internet gateway
+      ec2_vpc_igw:
+        vpc_id: "{{vpc_out.vpc.id}}"
+        state: present
+        region: "{{region}}"
+      register: gateway_out
+
+    - name: public subnet route table
+      ec2_vpc_route_table:
+        vpc_id: "{{vpc_out.vpc.id}}"
+        state: present
+        region: "{{region}}"
+        subnets:
+          - "{{public_subnet_1.subnet.id}}"
+          - "{{public_subnet_2.subnet.id}}"
+          - "{{public_subnet_3.subnet.id}}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ gateway_out.gateway_id}}"
+        tags:
+          Name: "public_route_table"
+      register: public_route_table
+
+    - name: nate gateway for private ip
+      ec2_vpc_nat_gateway:
+          state: present
+          subnet_id: "{{public_subnet_1.subnet.id}}"
+          wait: true
+          region: "{{region}}"
+          if_exist_do_not_create: true
+      register: nat_gateway_out
+
+    - name: private subnet route table
+      ec2_vpc_route_table:
+        vpc_id: "{{vpc_out.vpc.id}}"
+        state: present
+        region: "{{region}}"
+        subnets:
+          - "{{private_subnet_1.subnet.id}}"
+          - "{{private_subnet_2.subnet.id}}"
+          - "{{private_subnet_3.subnet.id}}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{nat_gateway_out.nat_gateway_id}}"
+        tags:
+          Name: "private_route_table"
+      register: private_route_table
+
+    - debug:
+        var: "{{item}}"
+      loop:
+        - vpc_out.vpc.id
+        - public_subnet_1.subnet.id
+        - public_subnet_2.subnet.id
+        - public_subnet_3.subnet.id
+        - private_subnet_1.subnet.id
+        - private_subnet_2.subnet.id
+        - private_subnet_3.subnet.id
+        - gateway_out.gateway_id
+        - public_route_table.route_table.id
+        - nat_gateway_out.nat_gateway_id
+        - private_route_table.route_table.id
+
+    - set_fact:
+        vpcid: "{{vpc_out.vpc.id}}"
+        publicSubId1: "{{public_subnet_1.subnet.id}}"
+        publicSubId2: "{{public_subnet_2.subnet.id}}"
+        publicSubId3: "{{public_subnet_3.subnet.id}}"
+        privateSubId1: "{{private_subnet_1.subnet.id}}"
+        privateSubId2: "{{private_subnet_2.subnet.id}}"
+        privateSubId3: "{{private_subnet_3.subnet.id}}"
+        gatewayId: "{{gateway_out.gateway_id}}"
+        pubRouteTableId: "{{public_route_table.route_table.id}}"
+        natGatewayId: "{{nat_gateway_out.nat_gateway_id}}"
+        priRouteTableId: "{{private_route_table.route_table.id}}"
+        region: "{{region}}"
+        cacheable: true
+
+    - name: create variable file
+      copy:
+        content: "vpcid: {{vpc_out.vpc.id}} \n  publicSubId1: {{public_subnet_1.subnet.id}} \n publicSubId2: {{public_subnet_2.subnet.id}} \n publicSubId3: {{public_subnet_3.subnet.id}} \n privateSubId1: {{private_subnet_1.subnet.id}} \n privateSubId2: {{private_subnet_2.subnet.id}} \n privateSubId3: {{private_subnet_3.subnet.id}} \n gatewayId: {{gateway_out.gateway_id}} \n pubRouteTableId: {{public_route_table.route_table.id}} \n natGatewayId: {{nat_gateway_out.nat_gateway_id}} \n priRouteTableId: {{private_route_table.route_table.id}}\n region: {{region}} \n"
+        dest: vars/outputs_vars
+
+
+
+

@@ -1,0 +1,216 @@
+---
+- name: baston instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: import output variables
+      include_vars: vars/stack
+
+    - name: import stack variables
+      include_vars: vars/outputs_vars
+
+    - name: create key pair
+      ec2_key:
+        name: stack_key
+        region: "{{region}}"
+      register: stack_key_out
+
+    - name: save the key to a file
+      copy:
+        content: "{{stack_key_out.key.private_key}}"
+        dest: "./login_key.pem"
+        mode: "0600"
+      when: stack_key_out.changed
+
+    - name: create loadbalancer security group
+      ec2_group:
+        name: load_balancer_sg
+        description: LB security group
+        vpc_id: "{{vpcid}}"
+        region: "{{region}}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+        register: lb_group_out
+
+    - name: create stack security group
+      ec2_group:
+        name: stack_sg
+        description: stack security group
+        vpc_id: "{{vpcid}}"
+        region: "{{region}}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            group_id: lb_group_out.group_id
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            group_id: "{{baston_gp_id}}"
+        register: stack_group_out
+
+    - name: all trafic within stack
+      ec2_group:
+        name: stack_sg
+        description: allow all trafic within security group
+        vpc_id: "{{vpcid}}"
+        region: "{{region}}"
+        purge_rules: no
+        rules:
+          - proto: all
+            group_id: "{{stack_group_out.group_id}}"
+        register: stack_group_out
+
+    - name: nginx ec2 instance
+      ec2_instance:
+        name: "nginx-ec2-instance"
+        key_name: "stack_key"
+        vpc_subnet_id: "{{privateSubId1}}"
+        instance_type: "t2.micro"
+        security_group: "{{stack_group_out.group_id}}"
+        region: "{{region}}"
+        image_id: "{{nginx_ami}}"
+        tags:
+          Name: nginx_instance
+        exact_count: 1
+        availability_zone: "{{availability_zone_1}}"
+        wait: true
+        register: nginx_ec2_out
+
+    - name: tomcat ec2 instance
+      ec2_instance:
+          name: "tomcat-ec2-instance"
+          key_name: "stack_key"
+          vpc_subnet_id: "{{privateSubId1}}"
+          instance_type: "t2.micro"
+          security_group: "{{stack_group_out.group_id}}"
+          region: "{{region}}"
+          image_id: "{{tomcat_ami}}"
+          tags:
+            Name: tomcat_instance
+          exact_count: 1
+          availability_zone: "{{availability_zone_1}}"
+          wait: true
+          register: tomcat_ec2_out
+
+    - name: memcache ec2 instance
+      ec2_instance:
+        name: "memcache-ec2-instance"
+        key_name: "stack_key"
+        vpc_subnet_id: "{{privateSubId1}}"
+        instance_type: "t2.micro"
+        security_group: "{{stack_group_out.group_id}}"
+        region: "{{region}}"
+        image_id: "{{memcache_ami}}"
+        tags:
+          Name: memcache_instance
+        exact_count: 1
+        availability_zone: "{{availability_zone_1}}"
+        wait: true
+        register: memcache_ec2_out
+
+    - name: rmq ec2 instance
+      ec2_instance:
+        name: "rmq-ec2-instance"
+        key_name: "stack_key"
+        vpc_subnet_id: "{{privateSubId1}}"
+        instance_type: "t2.micro"
+        security_group: "{{stack_group_out.group_id}}"
+        region: "{{region}}"
+        image_id: "{{rmq_ami}}"
+        tags:
+          Name: rmq_instance
+        exact_count: 1
+        availability_zone: "{{availability_zone_1}}"
+        wait: true
+        register: rmq_ec2_out
+
+    - name: mysql ec2 instance
+      ec2_instance:
+        name: "mysql-ec2-instance"
+        key_name: "stack_key"
+        vpc_subnet_id: "{{privateSubId1}}"
+        instance_type: "t2.micro"
+        security_group: "{{stack_group_out.group_id}}"
+        region: "{{region}}"
+        image_id: "{{mysql_ami}}"
+        tags:
+          Name: mysql_instance
+        exact_count: 1
+        availability_zone: "{{availability_zone_1}}"
+        wait: true
+        register: mysql_ec2_out
+
+    - local_action:
+        module: ec2_elb_lb
+        name: "stack-elb"
+        region: "{{region}}"
+        state: present
+        instance_ids:
+          - "{{nginx_ec2_out.tagged_instances[0].id}}"
+        purge_instance_ids: true
+        security_group_ids: "{{lb_group_out.group_id}}"
+        subnets:
+          - "{{publicSubId1}}"
+          - "{{publicSubId2}}"
+          - "{{publicSubId3}}"
+        listeners:
+          - protocol: http
+            load_balancer_port: 80
+            instance_port: 80
+
+    - name: inser update hosts ip and name
+      blockinfile:
+        path: provision-stack/group_vars/hostsip
+        block: |
+          nginx: "{{nginx_ec2_out.tagged_instances[0].private_ip}}"
+          tomcat: "{{tomcat_ec2_out.tagged_instances[0].private_ip}}"
+          memcache: "{{memcache_ec2_out.tagged_instances[0].private_ip}}"
+          rmq: "{{rmq_ec2_out.tagged_instances[0].private_ip}}"
+          mysql: "{{mysql_ec2_out.tagged_instances[0].private_ip}}"
+
+    - name: copy login key
+      copy:
+        src: login_key.pem
+        dest: provision-stack/login_key.pem
+        mode: "0400"
+
+    - name: insert/update Inventory file provision-stack/inventory-stack
+      blockinfile:
+        path: provision-stack/inventory-stack
+        block: |
+          nginx ansible_host={{nginx_ec2_out.tagged_instances[0].private_ip}}
+          tomcat ansible_host={{tomcat_ec2_out.tagged_instances[0].private_ip}}
+          memcache ansible_host={{memcache_ec2_out.tagged_instances[0].private_ip}}
+          rmq ansible_host={{rmq_ec2_out.tagged_instances[0].private_ip}}
+          mysql ansible_host={{mysql_ec2_out.tagged_instances[0].private_ip}}
+          
+          [websrvgrp]
+          nginx
+          
+          [appsrvgrp]
+          tomcat
+          
+          [memcache]
+          memcache
+          
+          [rabbitmq]
+          rmq
+          
+          [db]
+          mysql
+          
+          [stack:children]
+          websrvgrp
+          appsrvgrp
+          memcache
+          rabbitmq
+          db
+          
+          [stack:vars]
+          ansible_user=ubuntu
+          ansible_ssh_private_key_file=login_key.pem
